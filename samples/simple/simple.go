@@ -188,10 +188,10 @@ var gsuiteOauthConfig = []byte(`{"installed": {
 }}`)
 
 func main() {
-	material.Load(home("Documents/src/material-design-icons"))
-	mdi.Load(home("Documents/src/MaterialDesign-Webfont"))
-	typicons.Load(home("Documents/src/typicons.font"))
-	fontawesome.Load(home("Documents/src/Font-Awesome"))
+	material.Load(home("src/material-design-icons"))
+	mdi.Load(home("src/MaterialDesign-Webfont"))
+	typicons.Load(home("src/typicons.font"))
+	fontawesome.Load(home("src/Font-Awesome"))
 
 	colors.LoadBarConfig()
 	bg := colors.Scheme("background")
