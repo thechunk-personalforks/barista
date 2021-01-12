@@ -37,6 +37,8 @@ import (
 	"barista.run/modules/clock"
 	"barista.run/modules/cputemp"
 	"barista.run/modules/github"
+	"barista.run/modules/gsuite/calendar"
+	"barista.run/modules/gsuite/gmail"
 	"barista.run/modules/media"
 	"barista.run/modules/meminfo"
 	"barista.run/modules/netspeed"
@@ -458,8 +460,7 @@ func main() {
 			out := outputs.Group().InnerSeparators(false)
 			out.Append(pango.Icon("mdi-calendar"))
 			for _, e := range evtsOfInterest {
-				out.Append(outputs.Textf("%s", e.Start.Format("15:04")).
-					OnClick(calendarNotifyHandler(e)))
+				out.Append(outputs.Textf("%s", e.Start.Format("15:04")))
 			}
 			return out
 		})
