@@ -36,11 +36,7 @@ import (
 	"barista.run/modules/battery"
 	"barista.run/modules/clock"
 	"barista.run/modules/cputemp"
-	"barista.run/modules/github"
-	"barista.run/modules/gsuite/calendar"
-	"barista.run/modules/gsuite/gmail"
 	"barista.run/modules/media"
-	"barista.run/modules/meminfo"
 	"barista.run/modules/netspeed"
 	"barista.run/modules/sysinfo"
 	"barista.run/modules/volume"
@@ -213,14 +209,14 @@ func main() {
 	}
 
 	localtime := clock.Local().
-		Output(time.Second, func(now time.Time) bar.Output {
+		Output(time.Minute, func(now time.Time) bar.Output {
 			return outputs.Pango(
 				pango.Icon("far-calendar-alt").Color(colors.Scheme("dim-icon")),
 				spacer,
 				now.Format("Mon Jan 2 "),
 				pango.Icon("far-clock").Color(colors.Scheme("dim-icon")),
 				spacer,
-				now.Format("15:04:05"),
+				now.Format("15:04"),
 			).OnClick(click.RunLeft("gsimplecal"))
 		})
 
@@ -343,7 +339,11 @@ func main() {
 	})
 
 	loadAvg := sysinfo.New().Output(func(s sysinfo.Info) bar.Output {
-		out := outputs.Textf("%0.2f %0.2f", s.Loads[0], s.Loads[2])
+		out := outputs.Pango(
+			pango.Icon("fa-weight-hanging"),
+			spacer,
+			pango.Textf("%0.2f %0.2f", s.Loads[0], s.Loads[2]),
+		)
 		// Load averages are unusually high for a few minutes after boot.
 		if s.Uptime < 10*time.Minute {
 			// so don't add colours until 10 minutes after system start.
@@ -356,27 +356,6 @@ func main() {
 			out.Color(colors.Scheme("bad"))
 		case s.Loads[0] > 32, s.Loads[2] > 16:
 			out.Color(colors.Scheme("degraded"))
-		}
-		out.OnClick(startTaskManager)
-		return out
-	})
-
-	freeMem := meminfo.New().Output(func(m meminfo.Info) bar.Output {
-		out := outputs.Pango(
-			pango.Icon("fa-memory"),
-			spacer,
-			format.IBytesize(m.Available()),
-		)
-		freeGigs := m.Available().Gigabytes()
-		switch {
-		case freeGigs < 0.5:
-			out.Urgent(true)
-		case freeGigs < 1:
-			out.Color(colors.Scheme("bad"))
-		case freeGigs < 2:
-			out.Color(colors.Scheme("degraded"))
-		case freeGigs > 12:
-			out.Color(colors.Scheme("good"))
 		}
 		out.OnClick(startTaskManager)
 		return out
@@ -413,67 +392,13 @@ func main() {
 			)
 		})
 
-	rhythmbox := media.New("rhythmbox").Output(mediaFormatFunc)
-
-	ghNotify := github.New("%%GITHUB_CLIENT_ID%%", "%%GITHUB_CLIENT_SECRET%%").
-		Output(func(n github.Notifications) bar.Output {
-			if n.Total() == 0 {
-				return nil
-			}
-			out := outputs.Group(
-				pango.Icon("fab-github").
-					Concat(spacer).
-					ConcatTextf("%d", n.Total()))
-			mentions := n["mention"] + n["team_mention"]
-			if mentions > 0 {
-				out.Append(spacer)
-				out.Append(outputs.Pango(
-					pango.Icon("mdi-bell").
-						ConcatTextf("%d", mentions)).
-					Urgent(true))
-			}
-			return out.Glue().OnClick(
-				click.RunLeft("xdg-open", "https://github.com/notifications"))
-		})
-
-	gm := gmail.New(gsuiteOauthConfig, "INBOX").
-		Output(func(i gmail.Info) bar.Output {
-			if i.Unread["INBOX"] == 0 {
-				return nil
-			}
-			return outputs.Pango(
-				pango.Icon("fa-envelope"),
-				spacer,
-				pango.Textf("%d", i.Unread["INBOX"]),
-			).OnClick(click.RunLeft("xdg-open", "https://mail.google.com"))
-		})
-
-	cal := calendar.New(gsuiteOauthConfig).
-		Output(func(evts calendar.EventList) bar.Output {
-			evtsOfInterest := append(evts.InProgress, evts.Alerting...)
-			if len(evtsOfInterest) == 0 && len(evts.Upcoming) > 0 {
-				evtsOfInterest = append(evtsOfInterest, evts.Upcoming[0])
-			}
-			if len(evtsOfInterest) == 0 {
-				return nil
-			}
-			out := outputs.Group().InnerSeparators(false)
-			out.Append(pango.Icon("mdi-calendar"))
-			for _, e := range evtsOfInterest {
-				out.Append(outputs.Textf("%s", e.Start.Format("15:04")))
-			}
-			return out
-		})
+	rhythmbox := media.Auto().Output(mediaFormatFunc)
 
 	panic(barista.Run(
 		rhythmbox,
 		net,
 		temp,
-		freeMem,
 		loadAvg,
-		gm,
-		cal,
-		ghNotify,
 		vol,
 		batt,
 		wthr,
