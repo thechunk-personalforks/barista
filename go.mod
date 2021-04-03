@@ -4,6 +4,7 @@ go 1.13
 
 require (
 	github.com/coreos/go-systemd/v22 v22.3.2
+	github.com/RobinUS2/golang-moving-average v1.0.0 // indirect
 	github.com/dustin/go-humanize v1.0.0
 	github.com/fsnotify/fsnotify v1.4.9
 	github.com/godbus/dbus/v5 v5.0.4

@@ -32,7 +32,6 @@ import (
 	"barista.run/base/click"
 	"barista.run/base/watchers/netlink"
 	"barista.run/colors"
-	"barista.run/format"
 	"barista.run/modules/battery"
 	"barista.run/modules/clock"
 	"barista.run/modules/cputemp"
@@ -54,15 +53,20 @@ import (
 	colorful "github.com/lucasb-eyer/go-colorful"
 	"github.com/martinlindhe/unit"
 	keyring "github.com/zalando/go-keyring"
+	"github.com/RobinUS2/golang-moving-average"
 )
 
 var spacer = pango.Text(" ").XXSmall()
+
+func outputGroup(g *outputs.SegmentGroup) *outputs.SegmentGroup {
+	return g.InnerSeparators(false).InnerPadding(5).Padding(12)
+}
 
 func truncate(in string, l int) string {
 	if len([]rune(in)) <= l {
 		return in
 	}
-	return string([]rune(in)[:l-1]) + "⋯"
+	return string([]rune(in)[:l-1]) + "…"
 }
 
 func hms(d time.Duration) (h int, m int, s int) {
@@ -72,35 +76,7 @@ func hms(d time.Duration) (h int, m int, s int) {
 	return
 }
 
-func formatMediaTime(d time.Duration) string {
-	h, m, s := hms(d)
-	if h > 0 {
-		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
-	}
-	return fmt.Sprintf("%d:%02d", m, s)
-}
-
-func mediaFormatFunc(m media.Info) bar.Output {
-	if m.PlaybackStatus == media.Stopped || m.PlaybackStatus == media.Disconnected {
-		return nil
-	}
-	artist := truncate(m.Artist, 20)
-	title := truncate(m.Title, 40-len(artist))
-	if len(title) < 20 {
-		artist = truncate(m.Artist, 40-len(title))
-	}
-	iconAndPosition := pango.Icon("fa-music").Color(colors.Hex("#f70"))
-	if m.PlaybackStatus == media.Playing {
-		iconAndPosition.Append(
-			spacer, pango.Textf("%s/%s",
-				formatMediaTime(m.Position()),
-				formatMediaTime(m.Length)),
-		)
-	}
-	return outputs.Pango(iconAndPosition, spacer, title, " - ", artist)
-}
-
-var startTaskManager = click.RunLeft("xfce4-taskmanager")
+var startTaskManager = click.RunLeft("lxtask")
 
 func home(path string) string {
 	usr, err := user.Current()
@@ -211,12 +187,9 @@ func main() {
 	localtime := clock.Local().
 		Output(time.Minute, func(now time.Time) bar.Output {
 			return outputs.Pango(
-				pango.Icon("far-calendar-alt").Color(colors.Scheme("dim-icon")),
-				spacer,
-				now.Format("Mon Jan 2 "),
 				pango.Icon("far-clock").Color(colors.Scheme("dim-icon")),
 				spacer,
-				now.Format("15:04"),
+				now.Format("02.01.2006 15:04"),
 			).OnClick(click.RunLeft("gsimplecal"))
 		})
 
@@ -263,7 +236,7 @@ func main() {
 		return outputs.Pango(
 			pango.Icon("fa-"+iconName), spacer,
 			pango.Textf("%.1f℃", w.Temperature.Celsius()),
-			pango.Textf(" (%s)", w.Location).XSmall(),
+			pango.Textf(" %s", w.Location).XSmall(),
 		)
 	})
 
@@ -320,9 +293,10 @@ func main() {
 
 	vol := volume.New(alsa.DefaultMixer()).Output(func(v volume.Volume) bar.Output {
 		if v.Mute {
-			return outputs.
-				Pango(pango.Icon("fa-volume-mute"), spacer, "MUT").
-				Color(colors.Scheme("degraded"))
+			return outputGroup(outputs.Group(
+				pango.Icon("fa-volume-mute"),
+				outputs.Text("MUT"),
+			))
 		}
 		iconName := "off"
 		pct := v.Pct()
@@ -331,11 +305,11 @@ func main() {
 		} else if pct > 33 {
 			iconName = "down"
 		}
-		return outputs.Pango(
+
+		return outputGroup(outputs.Group(
 			pango.Icon("fa-volume-"+iconName),
-			spacer,
-			pango.Textf("%2d%%", pct),
-		)
+			outputs.Textf("%2d%%", pct),
+		))
 	})
 
 	loadAvg := sysinfo.New().Output(func(s sysinfo.Info) bar.Output {
@@ -381,25 +355,77 @@ func main() {
 
 	sub := netlink.Any()
 	iface := sub.Get().Name
+	ips := sub.Get().IPs
 	sub.Unsubscribe()
+	maTx := movingaverage.New(5)
+	maRx := movingaverage.New(5)
 	net := netspeed.New(iface).
-		RefreshInterval(2 * time.Second).
+		RefreshInterval(time.Second / 2).
 		Output(func(s netspeed.Speeds) bar.Output {
-			return outputs.Pango(
-				pango.Icon("fa-upload"), spacer, pango.Textf("%7s", format.Byterate(s.Tx)),
-				pango.Text(" ").Small(),
-				pango.Icon("fa-download"), spacer, pango.Textf("%7s", format.Byterate(s.Rx)),
+			maTx.Add(s.Tx.BitsPerSecond())
+			maRx.Add(s.Rx.BitsPerSecond())
+
+			txColor := colors.Hex("#fff")
+			rxColor := colors.Hex("#fff")
+
+			minActivityBits := 40000.0 // 5 KB
+
+			if maTx.Avg() > minActivityBits {
+				txColor = colors.Hex("#bfff00")
+			}
+			if maRx.Avg() > minActivityBits {
+				rxColor = colors.Hex("#ff00ae")
+			}
+
+			group := outputs.Group(
+				outputs.Pango(pango.Icon("fa-angle-up").Color(txColor)),
+				outputs.Pango(pango.Icon("fa-angle-down").Color(rxColor)),
 			)
+
+			for _, ip := range ips {
+				if len(ip) == 4 {
+					group.Append(outputs.Pango(
+						pango.Text(iface),
+						pango.Textf(" %s", ip.String()).XSmall()),
+					)
+				}
+			}
+
+			return outputGroup(group).OnClick(click.RunLeft("nm-connection-editor"))
 		})
 
-	rhythmbox := media.Auto().Output(mediaFormatFunc)
+	rhythmbox := media.Auto().
+		Output(func(m media.Info) bar.Output {
+			if m.PlaybackStatus == media.Stopped || m.PlaybackStatus == media.Disconnected {
+				return nil
+			}
+
+			artist := truncate(m.Artist, 20)
+			title := truncate(m.Title, 40-len(artist))
+			if len(title) < 20 {
+				artist = truncate(m.Artist, 40-len(title))
+			}
+
+			group := new(outputs.SegmentGroup)
+
+			if m.Playing() {
+				group.Append(outputs.Pango(pango.Icon("fa-pause")).Color(colors.Hex("#f70")).OnClick(click.Left(m.Pause)))
+			} else {
+				group.Append(outputs.Pango(pango.Icon("fa-play")).Color(colors.Hex("#f70")).OnClick(click.Left(m.Play)))
+			}
+
+			group.Append(outputs.Pango(pango.Icon("fa-step-forward")).Color(colors.Hex("#f70")).OnClick(click.Left(m.Next)))
+			group.Append(outputs.Textf("%s · %s", title, artist).OnClick(nil))
+
+			return outputGroup(group)
+		})
 
 	panic(barista.Run(
 		rhythmbox,
+		vol,
 		net,
 		temp,
 		loadAvg,
-		vol,
 		batt,
 		wthr,
 		localtime,
