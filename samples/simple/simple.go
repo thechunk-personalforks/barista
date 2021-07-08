@@ -32,14 +32,10 @@ import (
 	"barista.run/base/click"
 	"barista.run/base/watchers/netlink"
 	"barista.run/colors"
-	"barista.run/format"
-	"barista.run/group/collapsing"
 	"barista.run/modules/battery"
 	"barista.run/modules/clock"
 	"barista.run/modules/cputemp"
-	"barista.run/modules/github"
 	"barista.run/modules/media"
-	"barista.run/modules/meminfo"
 	"barista.run/modules/netspeed"
 	"barista.run/modules/sysinfo"
 	"barista.run/modules/volume"
@@ -57,15 +53,20 @@ import (
 	colorful "github.com/lucasb-eyer/go-colorful"
 	"github.com/martinlindhe/unit"
 	keyring "github.com/zalando/go-keyring"
+	"github.com/RobinUS2/golang-moving-average"
 )
 
 var spacer = pango.Text(" ").XXSmall()
+
+func outputGroup(g *outputs.SegmentGroup) *outputs.SegmentGroup {
+	return g.InnerSeparators(false).InnerPadding(5).Padding(12)
+}
 
 func truncate(in string, l int) string {
 	if len([]rune(in)) <= l {
 		return in
 	}
-	return string([]rune(in)[:l-1]) + "⋯"
+	return string([]rune(in)[:l-1]) + "…"
 }
 
 func hms(d time.Duration) (h int, m int, s int) {
@@ -75,35 +76,7 @@ func hms(d time.Duration) (h int, m int, s int) {
 	return
 }
 
-func formatMediaTime(d time.Duration) string {
-	h, m, s := hms(d)
-	if h > 0 {
-		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
-	}
-	return fmt.Sprintf("%d:%02d", m, s)
-}
-
-func mediaFormatFunc(m media.Info) bar.Output {
-	if m.PlaybackStatus == media.Stopped || m.PlaybackStatus == media.Disconnected {
-		return nil
-	}
-	artist := truncate(m.Artist, 20)
-	title := truncate(m.Title, 40-len(artist))
-	if len(title) < 20 {
-		artist = truncate(m.Artist, 40-len(title))
-	}
-	iconAndPosition := pango.Icon("fa-music").Color(colors.Hex("#f70"))
-	if m.PlaybackStatus == media.Playing {
-		iconAndPosition.Append(
-			spacer, pango.Textf("%s/%s",
-				formatMediaTime(m.Position()),
-				formatMediaTime(m.Length)),
-		)
-	}
-	return outputs.Pango(iconAndPosition, spacer, title, " - ", artist)
-}
-
-var startTaskManager = click.RunLeft("xfce4-taskmanager")
+var startTaskManager = click.RunLeft("lxtask")
 
 func home(path string) string {
 	usr, err := user.Current()
@@ -187,10 +160,10 @@ var gsuiteOauthConfig = []byte(`{"installed": {
 }}`)
 
 func main() {
-	material.Load(home("Github/material-design-icons"))
-	mdi.Load(home("Github/MaterialDesign-Webfont"))
-	typicons.Load(home("Github/typicons.font"))
-	fontawesome.Load(home("Github/Font-Awesome"))
+	material.Load(home("src/material-design-icons"))
+	mdi.Load(home("src/MaterialDesign-Webfont"))
+	typicons.Load(home("src/typicons.font"))
+	fontawesome.Load(home("src/Font-Awesome"))
 
 	colors.LoadBarConfig()
 	bg := colors.Scheme("background")
@@ -212,12 +185,11 @@ func main() {
 	}
 
 	localtime := clock.Local().
-		Output(time.Second, func(now time.Time) bar.Output {
+		Output(time.Minute, func(now time.Time) bar.Output {
 			return outputs.Pango(
-				pango.Icon("material-today").Color(colors.Scheme("dim-icon")),
-				now.Format("Mon Jan 2 "),
-				pango.Icon("material-access-time").Color(colors.Scheme("dim-icon")),
-				now.Format("15:04:05"),
+				pango.Icon("far-clock").Color(colors.Scheme("dim-icon")),
+				spacer,
+				now.Format("02.01.2006 15:04"),
 			).OnClick(click.RunLeft("gsimplecal"))
 		})
 
@@ -229,44 +201,42 @@ func main() {
 		case weather.Thunderstorm,
 			weather.TropicalStorm,
 			weather.Hurricane:
-			iconName = "stormy"
+			iconName = "poo-storm"
 		case weather.Drizzle,
 			weather.Hail:
-			iconName = "shower"
+			iconName = "cloud-rain"
 		case weather.Rain:
-			iconName = "downpour"
+			iconName = "cloud-showers-heavy"
 		case weather.Snow,
 			weather.Sleet:
-			iconName = "snow"
+			iconName = "snowflake"
 		case weather.Mist,
 			weather.Smoke,
 			weather.Whirls,
 			weather.Haze,
 			weather.Fog:
-			iconName = "windy-cloudy"
+			iconName = "smog"
 		case weather.Clear:
 			if !w.Sunset.IsZero() && time.Now().After(w.Sunset) {
-				iconName = "night"
+				iconName = "moon"
 			} else {
-				iconName = "sunny"
+				iconName = "sun"
 			}
 		case weather.PartlyCloudy:
-			iconName = "partly-sunny"
+			iconName = "cloud-sun"
 		case weather.Cloudy, weather.Overcast:
-			iconName = "cloudy"
+			iconName = "cloud"
 		case weather.Tornado,
 			weather.Windy:
-			iconName = "windy"
+			iconName = "wind"
 		}
 		if iconName == "" {
-			iconName = "warning-outline"
-		} else {
-			iconName = "weather-" + iconName
+			iconName = "exclamation-circle"
 		}
 		return outputs.Pango(
-			pango.Icon("typecn-"+iconName), spacer,
+			pango.Icon("fa-"+iconName), spacer,
 			pango.Textf("%.1f℃", w.Temperature.Celsius()),
-			pango.Textf(" (provided by %s)", w.Attribution).XSmall(),
+			pango.Textf(" %s", w.Location).XSmall(),
 		)
 	})
 
@@ -323,9 +293,10 @@ func main() {
 
 	vol := volume.New(alsa.DefaultMixer()).Output(func(v volume.Volume) bar.Output {
 		if v.Mute {
-			return outputs.
-				Pango(pango.Icon("fa-volume-mute"), spacer, "MUT").
-				Color(colors.Scheme("degraded"))
+			return outputGroup(outputs.Group(
+				pango.Icon("fa-volume-mute"),
+				outputs.Text("MUT"),
+			))
 		}
 		iconName := "off"
 		pct := v.Pct()
@@ -334,15 +305,19 @@ func main() {
 		} else if pct > 33 {
 			iconName = "down"
 		}
-		return outputs.Pango(
+
+		return outputGroup(outputs.Group(
 			pango.Icon("fa-volume-"+iconName),
-			spacer,
-			pango.Textf("%2d%%", pct),
-		)
+			outputs.Textf("%2d%%", pct),
+		))
 	})
 
 	loadAvg := sysinfo.New().Output(func(s sysinfo.Info) bar.Output {
-		out := outputs.Textf("%0.2f %0.2f", s.Loads[0], s.Loads[2])
+		out := outputs.Pango(
+			pango.Icon("fa-weight-hanging"),
+			spacer,
+			pango.Textf("%0.2f %0.2f", s.Loads[0], s.Loads[2]),
+		)
 		// Load averages are unusually high for a few minutes after boot.
 		if s.Uptime < 10*time.Minute {
 			// so don't add colours until 10 minutes after system start.
@@ -360,28 +335,11 @@ func main() {
 		return out
 	})
 
-	freeMem := meminfo.New().Output(func(m meminfo.Info) bar.Output {
-		out := outputs.Pango(pango.Icon("material-memory"), format.IBytesize(m.Available()))
-		freeGigs := m.Available().Gigabytes()
-		switch {
-		case freeGigs < 0.5:
-			out.Urgent(true)
-		case freeGigs < 1:
-			out.Color(colors.Scheme("bad"))
-		case freeGigs < 2:
-			out.Color(colors.Scheme("degraded"))
-		case freeGigs > 12:
-			out.Color(colors.Scheme("good"))
-		}
-		out.OnClick(startTaskManager)
-		return out
-	})
-
 	temp := cputemp.New().
 		RefreshInterval(2 * time.Second).
 		Output(func(temp unit.Temperature) bar.Output {
 			out := outputs.Pango(
-				pango.Icon("mdi-fan"), spacer,
+				pango.Icon("fa-microchip"), spacer,
 				pango.Textf("%2d℃", int(temp.Celsius())),
 			)
 			switch {
@@ -397,47 +355,77 @@ func main() {
 
 	sub := netlink.Any()
 	iface := sub.Get().Name
+	ips := sub.Get().IPs
 	sub.Unsubscribe()
+	maTx := movingaverage.New(5)
+	maRx := movingaverage.New(5)
 	net := netspeed.New(iface).
-		RefreshInterval(2 * time.Second).
+		RefreshInterval(time.Second / 2).
 		Output(func(s netspeed.Speeds) bar.Output {
-			return outputs.Pango(
-				pango.Icon("fa-upload"), spacer, pango.Textf("%7s", format.Byterate(s.Tx)),
-				pango.Text(" ").Small(),
-				pango.Icon("fa-download"), spacer, pango.Textf("%7s", format.Byterate(s.Rx)),
+			maTx.Add(s.Tx.BitsPerSecond())
+			maRx.Add(s.Rx.BitsPerSecond())
+
+			txColor := colors.Hex("#fff")
+			rxColor := colors.Hex("#fff")
+
+			minActivityBits := 40000.0 // 5 KB
+
+			if maTx.Avg() > minActivityBits {
+				txColor = colors.Hex("#bfff00")
+			}
+			if maRx.Avg() > minActivityBits {
+				rxColor = colors.Hex("#ff00ae")
+			}
+
+			group := outputs.Group(
+				outputs.Pango(pango.Icon("fa-angle-up").Color(txColor)),
+				outputs.Pango(pango.Icon("fa-angle-down").Color(rxColor)),
 			)
+
+			for _, ip := range ips {
+				if len(ip) == 4 {
+					group.Append(outputs.Pango(
+						pango.Text(iface),
+						pango.Textf(" %s", ip.String()).XSmall()),
+					)
+				}
+			}
+
+			return outputGroup(group).OnClick(click.RunLeft("nm-connection-editor"))
 		})
 
-	rhythmbox := media.New("rhythmbox").Output(mediaFormatFunc)
-
-	grp, _ := collapsing.Group(net, temp, freeMem, loadAvg)
-
-	ghNotify := github.New("%%GITHUB_CLIENT_ID%%", "%%GITHUB_CLIENT_SECRET%%").
-		Output(func(n github.Notifications) bar.Output {
-			if n.Total() == 0 {
+	rhythmbox := media.Auto().
+		Output(func(m media.Info) bar.Output {
+			if m.PlaybackStatus == media.Stopped || m.PlaybackStatus == media.Disconnected {
 				return nil
 			}
-			out := outputs.Group(
-				pango.Icon("fab-github").
-					Concat(spacer).
-					ConcatTextf("%d", n.Total()))
-			mentions := n["mention"] + n["team_mention"]
-			if mentions > 0 {
-				out.Append(spacer)
-				out.Append(outputs.Pango(
-					pango.Icon("mdi-bell").
-						ConcatTextf("%d", mentions)).
-					Urgent(true))
+
+			artist := truncate(m.Artist, 20)
+			title := truncate(m.Title, 40-len(artist))
+			if len(title) < 20 {
+				artist = truncate(m.Artist, 40-len(title))
 			}
-			return out.Glue().OnClick(
-				click.RunLeft("xdg-open", "https://github.com/notifications"))
+
+			group := new(outputs.SegmentGroup)
+
+			if m.Playing() {
+				group.Append(outputs.Pango(pango.Icon("fa-pause")).Color(colors.Hex("#f70")).OnClick(click.Left(m.Pause)))
+			} else {
+				group.Append(outputs.Pango(pango.Icon("fa-play")).Color(colors.Hex("#f70")).OnClick(click.Left(m.Play)))
+			}
+
+			group.Append(outputs.Pango(pango.Icon("fa-step-forward")).Color(colors.Hex("#f70")).OnClick(click.Left(m.Next)))
+			group.Append(outputs.Textf("%s · %s", title, artist).OnClick(nil))
+
+			return outputGroup(group)
 		})
 
 	panic(barista.Run(
 		rhythmbox,
-		grp,
-		ghNotify,
 		vol,
+		net,
+		temp,
+		loadAvg,
 		batt,
 		wthr,
 		localtime,

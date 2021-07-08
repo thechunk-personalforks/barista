@@ -17,6 +17,7 @@ package battery
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,6 +44,14 @@ func write(battery battery) {
 		"/sys/class/power_supply/%s/uevent",
 		battery["NAME"].(string))
 	afero.WriteFile(fs, batteryFile, buffer.Bytes(), 0644)
+	batteryTypeFile := fmt.Sprintf(
+		"/sys/class/power_supply/%s/type",
+		battery["NAME"].(string))
+	if strings.HasPrefix(battery["NAME"].(string), "BAT") {
+		afero.WriteFile(fs, batteryTypeFile, []byte("Battery\n"), 0644)
+	} else {
+		afero.WriteFile(fs, batteryTypeFile, []byte("Mains\n"), 0644)
+	}
 }
 
 func TestDisconnected(t *testing.T) {
@@ -171,6 +180,19 @@ func TestSimple(t *testing.T) {
 		"CAPACITY":           50,
 	})
 
+	// (Pinebook Pro) example without CHARGE_NOW
+	write(battery{
+		"NAME":               "BAT3",
+		"STATUS":             "Discharging",
+		"PRESENT":            1,
+		"TECHNOLOGY":         "Li-ion",
+		"VOLTAGE_NOW":        20 * micros,
+		"CURRENT_NOW":        int(0.5 * float64(micros)),
+		"CHARGE_FULL_DESIGN": 5 * micros,
+		"CHARGE_FULL":        int(4.4 * float64(micros)),
+		"CAPACITY":           50,
+	})
+
 	info := batteryInfo("BAT0")
 	require.Equal(Charging, info.Status)
 	require.Equal("Li-poly", info.Technology)
@@ -189,6 +211,13 @@ func TestSimple(t *testing.T) {
 	require.True(info.PluggedIn())
 
 	info = batteryInfo("BAT2")
+	require.InDelta(20.0, info.Voltage, 0.01)
+	require.InDelta(100.0, info.EnergyMax, 0.01)
+	require.InDelta(88.0, info.EnergyFull, 0.01)
+	require.InDelta(44.0, info.EnergyNow, 0.01)
+	require.False(info.PluggedIn())
+
+	info = batteryInfo("BAT3")
 	require.InDelta(20.0, info.Voltage, 0.01)
 	require.InDelta(100.0, info.EnergyMax, 0.01)
 	require.InDelta(88.0, info.EnergyFull, 0.01)
